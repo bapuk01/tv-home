@@ -36,6 +36,9 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.Settings;
+import android.text.SpannableString;
+import android.text.Spanned;
+import android.text.style.ForegroundColorSpan;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -342,7 +345,7 @@ public class MainActivity extends Activity {
         inputs.setOnClickListener(v -> showInputs(v));
         // Streaming boxes (Chromecast) have no HDMI inputs or tuner: nothing to switch to, so no pill.
         if (!hasInputs()) inputs.setVisibility(View.GONE);
-        wifiPill = pill("Wi-Fi", "◉");
+        wifiPill = pill("Wi-Fi", "●");
         wifiPill.setOnClickListener(v -> launch(new Intent(Settings.ACTION_WIFI_SETTINGS)));
         // Only shown while something is hidden; lists the hidden apps so they can be brought back.
         hiddenPill = pill("Скрытые", "◌");
@@ -806,7 +809,10 @@ public class MainActivity extends Activity {
                 if (s != null && !s.contains("unknown ssid")) name = s.replace("\"", "");
             } catch (SecurityException ignored) { }
         }
-        wifiPill.setText("◉  " + name);
+        // Green dot while connected; the span keeps its colour when focus recolours the pill text.
+        SpannableString label = new SpannableString("●  " + name);
+        if (nc != null) label.setSpan(new ForegroundColorSpan(0xFF34C759), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+        wifiPill.setText(label);
     }
 
     // ---------------------------------------------------------------- weather
