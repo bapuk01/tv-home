@@ -9,6 +9,42 @@ Claude Code with one prompt, or do it by hand with the scripts here.
 On a 2 GB TCL Google TV this disabled 25 bloat apps and cut the home screen's memory use from
 192 MB to 83 MB. Everything is reversible: packages are disabled, never uninstalled.
 
+## Эта версия (Chromecast with Google TV, Windows, по-русски)
+
+Форк [mihirgupta0900/tv-home](https://github.com/mihirgupta0900/tv-home), доработанный для
+Chromecast with Google TV 2020 (Android 14) и сборки на Windows.
+
+- **Русский интерфейс**: «Доброе утро», «Все приложения», «Настройки», дата по-русски.
+- **Погода под датой**: «Иркутск ❄️ −15°». Город определяется по местоположению приставки
+  (включите: Настройки → Конфиденциальность → Местоположение), погода с Open-Meteo, без ключей.
+  Обновляется раз в 30 минут, пока открыт главный экран.
+- **Долгое нажатие OK на приложении** открывает меню:
+  - **Переместить**: стрелками по всему экрану, включая нижний ряд; OK — готово. Порядок сохраняется.
+  - **Скрыть**: убирает с главного экрана; вернуть через кнопку «Скрытые» наверху.
+  - **Удалить**: системное окно удаления.
+  - **О приложении**: страница приложения в настройках Android.
+- **Сборка и установка на Windows** без Gradle: [launcher/build.ps1](launcher/build.ps1),
+  [tools/windows/](tools/windows/) и список для Chromecast в
+  [examples/chromecast-google-tv-2020/](examples/chromecast-google-tv-2020/).
+
+Нужны JDK 17, Android SDK (build-tools 34.0.0, platform android-34) и
+[Platform Tools](https://developer.android.com/tools/releases/platform-tools) с `adb`.
+
+```powershell
+# 1. Включить на приставке «Для разработчиков» → «Беспроводная отладка», затем:
+adb pair 192.168.1.X:ПОРТ_СОПРЯЖЕНИЯ      # код из «Подключить устройство с помощью кода»
+adb connect 192.168.1.X:ПОРТ_ПОДКЛЮЧЕНИЯ
+# 2. Отключить мусор (обратимо) и поставить лаунчер:
+powershell -ExecutionPolicy Bypass -File tools\windows\disable.ps1 examples\chromecast-google-tv-2020\debloat.txt
+powershell -ExecutionPolicy Bypass -File tools\windows\install-launcher.ps1
+# Вернуть всё как было:
+powershell -ExecutionPolicy Bypass -File tools\windows\restore.ps1 examples\chromecast-google-tv-2020\debloat.txt
+```
+
+Приложения нижнего ряда при первом запуске задаются в
+[launcher/res/values/config.xml](launcher/res/values/config.xml), дальше их можно двигать прямо на ТВ.
+На Windows aapt2 записывает пути ассетов с `\`, поэтому `build.ps1` добавляет обои в APK сам.
+
 ## Do it with Claude Code (easiest)
 
 1. On the TV: Settings → System → About → press OK on **Build** 7 times → back → Developer options
@@ -49,7 +85,9 @@ Undo everything with `tools/restore.sh <the same list>`.
 | Path | What it is |
 |---|---|
 | [PROMPT.md](PROMPT.md) | The prompt for Claude Code / any coding agent |
-| [launcher/](launcher/) | The home screen. 4.7 MB including the wallpapers; plain Android, no network, no background services |
+| [launcher/](launcher/) | The home screen. 4.7 MB including the wallpapers; plain Android, no background services; network only for the weather |
+| [launcher/build.ps1](launcher/build.ps1) | Windows build of the APK (no Gradle) |
+| [tools/windows/](tools/windows/) | Windows scripts: disable / restore a debloat list, build + install the launcher |
 | [launcher/res/values/config.xml](launcher/res/values/config.xml) | Dock apps, hidden apps, Live TV app, grid columns |
 | [tools/tv.py](tools/tv.py) | Pure-Python ADB client: shell, batch, screenshots, chunked APK push |
 | [tools/find-tv.sh](tools/find-tv.sh) | Finds Android TVs on your Wi-Fi |
@@ -90,7 +128,7 @@ Change the dock: edit `config.xml`, then run `launcher/build-and-install.sh`.
 
 Android TV and Google TV: TCL, Xiaomi/Redmi, Hisense, Sony, OnePlus, Realme, Nvidia Shield,
 Chromecast with Google TV and most others. Not Samsung (Tizen), LG (webOS) or Fire TV.
-Tested on: TCL Google TV (Android 11). Add yours to `examples/`.
+Tested on: TCL Google TV (Android 11), Chromecast with Google TV 2020 (Android 14). Add yours to `examples/`.
 
 ## Credits
 

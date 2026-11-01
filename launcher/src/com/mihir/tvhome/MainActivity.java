@@ -8,6 +8,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
@@ -19,9 +20,16 @@ import android.graphics.Outline;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.location.Address;
+import android.location.Geocoder;
+import android.location.Location;
+import android.location.LocationManager;
 import android.media.tv.TvContract;
 import android.media.tv.TvInputInfo;
 import android.media.tv.TvInputManager;
+import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
+import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
 import android.os.Handler;
@@ -41,7 +49,12 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import org.json.JSONObject;
+
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -52,12 +65,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Scanner;
 import java.util.Set;
 
 /**
- * Apple TV style home screen: clock top-left, pills top-right, the focused dock app's name over an
- * ambient glow, a dock of pinned apps, and every other app in a grid that scrolls up on Down.
- * Plain framework views only (no AndroidX), no network, no background work.
+ * Apple TV style home screen: clock and weather top-left, pills top-right, the focused dock app's
+ * name over an ambient glow, a dock of pinned apps, and every other app in a grid that scrolls up on
+ * Down. Long-press a tile to move, hide, uninstall or inspect it. Plain framework views only (no
+ * AndroidX); the only network use is the weather (Open-Meteo), refreshed while the home is visible.
  */
 public class MainActivity extends Activity {
 
@@ -74,6 +89,12 @@ public class MainActivity extends Activity {
         boolean isBanner;
         int color;
     }
+
+    private final Map<String, App> apps = new HashMap<>();   // every launchable app, by package
+    private final List<String> order = new ArrayList<>();     // shown apps: the first `cols` form the dock
+    private final Set<String> userHidden = new HashSet<>();   // hidden from the long-press menu
+    private String focusedPkg, movingPkg;
+    private boolean relayout;
 
     private final Map<String, Integer> colorCache = new HashMap<>();
     private final List<View> dockCards = new ArrayList<>();
@@ -93,19 +114,22 @@ public class MainActivity extends Activity {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable rotateWallpaper = this::nextWallpaper;
     static final long WALLPAPER_INTERVAL_MS = 10 * 60 * 1000;
-    private TextView greeting, clock, ampm, date, title, wifiPill, appsLabel;
+    private final Runnable refreshWeather = this::updateWeather;
+    static final long WEATHER_INTERVAL_MS = 30 * 60 * 1000;
+    private long weatherAt;
+    private TextView greeting, clock, ampm, date, weather, title, wifiPill, hiddenPill, appsLabel;
     private int glowColor = 0xFF3A3A3A;
     private ValueAnimator glowAnim;
     private int lastFocusedId = View.NO_ID;
     private boolean firstShow = true;
     private int packageSeq;
-    private PopupWindow inputsPopup;
+    private PopupWindow menu;
 
     private final BroadcastReceiver tick = new BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) { updateClock(); updateWifi(); }
     };
     private final BroadcastReceiver packages = new BroadcastReceiver() {
-        @Override public void onReceive(Context c, Intent i) { buildApps(); }
+        @Override public void onReceive(Context c, Intent i) { loadApps(); }
     };
 
     // ---------------------------------------------------------------- lifecycle
@@ -123,7 +147,8 @@ public class MainActivity extends Activity {
                 View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         setContentView(buildUi());
-        buildApps();
+        loadApps();
+        showWeather();
 
         IntentFilter pf = new IntentFilter();
         pf.addAction(Intent.ACTION_PACKAGE_ADDED);
@@ -143,12 +168,13 @@ public class MainActivity extends Activity {
         registerReceiver(tick, tf);
         updateClock();
         updateWifi();
-        View last = lastFocusedId == View.NO_ID ? null : findViewById(lastFocusedId);
-        if (last == null && !dockCards.isEmpty()) last = dockCards.get(0);
-        if (last != null) last.requestFocus();
+        restoreFocus();
         // Catch installs/removals that happened while another app was in front.
-        if (getPackageManager().getChangedPackages(packageSeq) != null) buildApps();
+        if (getPackageManager().getChangedPackages(packageSeq) != null) loadApps();
         if (firstShow) { firstShow = false; playEntrance(); }
+        long sinceWeather = SystemClock.elapsedRealtime() - weatherAt;
+        if (weatherAt == 0 || sinceWeather >= WEATHER_INTERVAL_MS || weather.getVisibility() != View.VISIBLE) updateWeather();
+        else handler.postDelayed(refreshWeather, WEATHER_INTERVAL_MS - sinceWeather);
         // New photo on return if the current one has been up for the full interval.
         if (wallIndex < 0 || SystemClock.elapsedRealtime() - wallChangedAt >= WALLPAPER_INTERVAL_MS) nextWallpaper();
         else scheduleWallpaper(WALLPAPER_INTERVAL_MS - (SystemClock.elapsedRealtime() - wallChangedAt));
@@ -158,8 +184,10 @@ public class MainActivity extends Activity {
     protected void onPause() {
         super.onPause();
         handler.removeCallbacks(rotateWallpaper);
+        handler.removeCallbacks(refreshWeather);
         unregisterReceiver(tick);
-        if (inputsPopup != null) inputsPopup.dismiss();
+        if (menu != null) menu.dismiss();
+        if (movingPkg != null) { movingPkg = null; layoutApps(); }
     }
 
     @Override
@@ -172,7 +200,8 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         // Home pressed while already home: jump back to the first dock app.
-        if (inputsPopup != null) inputsPopup.dismiss();
+        if (menu != null) menu.dismiss();
+        if (movingPkg != null) { movingPkg = null; layoutApps(); }
         if (!dockCards.isEmpty()) dockCards.get(0).requestFocus();
         scroll.smoothScrollTo(0, 0);
     }
@@ -257,7 +286,7 @@ public class MainActivity extends Activity {
         bottom.addView(dockRow, new LinearLayout.LayoutParams(-1, -2));
 
         appsLabel = text(11, "sans-serif-medium", 0x99FFFFFF);
-        appsLabel.setText("ALL APPS");
+        appsLabel.setText("ВСЕ ПРИЛОЖЕНИЯ");
         appsLabel.setLetterSpacing(0.22f);
         content.addView(appsLabel, llp(-2, -2, dp(68), dp(8), 0, dp(18)));
 
@@ -295,19 +324,28 @@ public class MainActivity extends Activity {
         date.setPadding(0, 0, dp(16), 0); // letterSpacing is not counted in the measured width
         date.setLetterSpacing(0.22f);
         left.addView(date);
-        for (TextView t : new TextView[]{greeting, clock, ampm, date}) t.setShadowLayer(dp(10), 0, dp(1), 0xB3000000);
+
+        weather = text(15, "sans-serif-light", Color.WHITE);
+        weather.setSingleLine(true);
+        weather.setVisibility(View.GONE);
+        left.addView(weather, llp(-2, -2, 0, dp(10), 0, 0));
+        for (TextView t : new TextView[]{greeting, clock, ampm, date, weather}) t.setShadowLayer(dp(10), 0, dp(1), 0xB3000000);
         header.addView(left, new FrameLayout.LayoutParams(dp(420), -2, Gravity.START | Gravity.TOP));
 
         LinearLayout right = new LinearLayout(this);
         right.setGravity(Gravity.CENTER_VERTICAL);
         right.setClipChildren(false);
-        TextView inputs = pill("Inputs", "⇥");
+        TextView inputs = pill("Источники", "⇥");
         inputs.setOnClickListener(v -> showInputs(v));
         wifiPill = pill("Wi-Fi", "◉");
         wifiPill.setOnClickListener(v -> launch(new Intent(Settings.ACTION_WIFI_SETTINGS)));
-        TextView settings = pill("Settings", "⚙");
+        // Only shown while something is hidden; lists the hidden apps so they can be brought back.
+        hiddenPill = pill("Скрытые", "◌");
+        hiddenPill.setOnClickListener(v -> showHidden(v));
+        hiddenPill.setVisibility(View.GONE);
+        TextView settings = pill("Настройки", "⚙");
         settings.setOnClickListener(v -> launch(new Intent(Settings.ACTION_SETTINGS)));
-        for (TextView p : new TextView[]{inputs, wifiPill, settings}) {
+        for (TextView p : new TextView[]{inputs, wifiPill, hiddenPill, settings}) {
             right.addView(p, llp(-2, dp(30), dp(10), 0, 0, 0));
             pills.add(p);
         }
@@ -332,19 +370,21 @@ public class MainActivity extends Activity {
             ((TextView) v).setTextColor(has ? 0xFF111111 : 0xE6FFFFFF);
             v.animate().scaleX(has ? 1.08f : 1f).scaleY(has ? 1.08f : 1f)
                     .setInterpolator(new OvershootInterpolator(2f)).setDuration(220).start();
-            if (has) { lastFocusedId = v.getId(); scroll.smoothScrollTo(0, 0); fadeGlow(1f); }
+            if (has && !relayout) { lastFocusedId = v.getId(); focusedPkg = null; scroll.smoothScrollTo(0, 0); fadeGlow(1f); }
         });
         return p;
     }
 
     // ---------------------------------------------------------------- apps
 
-    private void buildApps() {
+    /** Re-read the launchable apps and merge them into the saved order; new apps go to the end. */
+    private void loadApps() {
         PackageManager pm = getPackageManager();
         android.content.pm.ChangedPackages changed = pm.getChangedPackages(packageSeq);
         if (changed != null) packageSeq = changed.getSequenceNumber();
         Intent q = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
-        Map<String, App> byPkg = new HashMap<>();
+        Map<String, App> byPkg = apps;
+        byPkg.clear();
         for (ResolveInfo ri : pm.queryIntentActivities(q, 0)) {
             ActivityInfo ai = ri.activityInfo;
             if (hidden.contains(ai.packageName) || byPkg.containsKey(ai.packageName)) continue;
@@ -360,49 +400,150 @@ public class MainActivity extends Activity {
             byPkg.put(a.pkg, a);
         }
 
-        List<App> dock = new ArrayList<>();
-        for (String p : dockApps) if (byPkg.containsKey(p)) dock.add(byPkg.remove(p));
-        List<App> rest = new ArrayList<>(byPkg.values());
-        Collections.sort(rest, (x, y) -> x.label.compareToIgnoreCase(y.label));
+        // Saved order first (the config's dock apps on first run), then anything new, alphabetically.
+        SharedPreferences prefs = getPreferences(MODE_PRIVATE);
+        userHidden.clear();
+        userHidden.addAll(split(prefs.getString("hidden", "")));
+        userHidden.retainAll(byPkg.keySet());
+        List<String> saved = split(prefs.getString("order", ""));
+        if (saved.isEmpty()) saved = Arrays.asList(dockApps);
+        order.clear();
+        for (String p : saved) if (byPkg.containsKey(p) && !userHidden.contains(p) && !order.contains(p)) order.add(p);
+        List<App> fresh = new ArrayList<>();
+        for (App a : byPkg.values()) if (!order.contains(a.pkg) && !userHidden.contains(a.pkg)) fresh.add(a);
+        Collections.sort(fresh, (x, y) -> x.label.compareToIgnoreCase(y.label));
+        for (App a : fresh) order.add(a.pkg);
+        saveOrder();
+        layoutApps();
+    }
 
+    /** Lay `order` out: the first `cols` apps in the dock, the rest in the grid below. */
+    private void layoutApps() {
+        // Removing the focused tile hands focus to the first pill for a moment; don't let that count.
+        String keepPkg = focusedPkg;
+        int keepId = lastFocusedId;
+        relayout = true;
         dockRow.removeAllViews();
         grid.removeAllViews();
         dockCards.clear();
         gridCards.clear();
 
-        for (int i = 0; i < dock.size(); i++) {
-            View tile = tile(dock.get(i), true);
+        int d = Math.min(cols, order.size());
+        for (int i = 0; i < d; i++) {
+            View tile = tile(apps.get(order.get(i)), true);
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, -2, 1f);
-            p.setMargins(i == 0 ? 0 : dp(10), 0, i == dock.size() - 1 ? 0 : dp(10), 0);
+            p.setMargins(i == 0 ? 0 : dp(10), 0, i == d - 1 ? 0 : dp(10), 0);
             dockRow.addView(tile, p);
         }
 
+        int rest = order.size() - d;
         LinearLayout row = null;
-        for (int i = 0; i < rest.size(); i++) {
+        for (int i = 0; i < rest; i++) {
             if (i % cols == 0) {
                 row = new LinearLayout(this);
                 row.setClipChildren(false);
                 row.setClipToPadding(false);
                 grid.addView(row, llp(-1, -2, 0, 0, 0, dp(26)));
             }
-            View tile = tile(rest.get(i), false);
+            View tile = tile(apps.get(order.get(d + i)), false);
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, -2, 1f);
             p.setMargins(i % cols == 0 ? 0 : dp(10), 0, i % cols == cols - 1 ? 0 : dp(10), 0);
             row.addView(tile, p);
         }
         // Pad the last row so tiles keep their width.
-        if (row != null) for (int i = rest.size() % cols; i != 0 && i < cols; i++) {
+        if (row != null) for (int i = rest % cols; i != 0 && i < cols; i++) {
             LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, 1, 1f);
             p.setMargins(dp(10), 0, i == cols - 1 ? 0 : dp(10), 0);
             row.addView(new View(this), p);
         }
-        appsLabel.setVisibility(rest.isEmpty() ? View.GONE : View.VISIBLE);
+        appsLabel.setVisibility(rest == 0 ? View.GONE : View.VISIBLE);
+        hiddenPill.setText("◌  Скрытые (" + userHidden.size() + ")");
+        hiddenPill.setVisibility(userHidden.isEmpty() ? View.GONE : View.VISIBLE);
         wireFocus();
 
-        if (!dock.isEmpty()) { title.setText(dock.get(0).label); setGlow(dock.get(0).color); }
-        View last = lastFocusedId == View.NO_ID ? null : findViewById(lastFocusedId);
-        if (last != null) last.requestFocus();
-        else if (!dockCards.isEmpty()) dockCards.get(0).requestFocus();
+        if (d > 0) { App first = apps.get(order.get(0)); title.setText(first.label); setGlow(first.color); }
+        relayout = false;
+        focusedPkg = keepPkg;
+        lastFocusedId = keepId;
+        restoreFocus();
+    }
+
+    /** Focus the last focused app (it may have moved) or pill, else the first dock app. */
+    private void restoreFocus() {
+        View v = null;
+        if (focusedPkg != null) for (View c : allCards()) if (((App) c.getTag()).pkg.equals(focusedPkg)) v = c;
+        if (v == null && focusedPkg == null && lastFocusedId != View.NO_ID) v = findViewById(lastFocusedId);
+        if ((v == null || v.getVisibility() != View.VISIBLE) && !dockCards.isEmpty()) v = dockCards.get(0);
+        if (v != null) v.requestFocus();
+    }
+
+    private List<View> allCards() {
+        List<View> all = new ArrayList<>(dockCards);
+        all.addAll(gridCards);
+        return all;
+    }
+
+    private void saveOrder() {
+        getPreferences(MODE_PRIVATE).edit()
+                .putString("order", String.join(",", order))
+                .putString("hidden", String.join(",", userHidden))
+                .apply();
+    }
+
+    private static List<String> split(String s) {
+        List<String> out = new ArrayList<>();
+        for (String p : s.split(",")) if (!p.isEmpty()) out.add(p);
+        return out;
+    }
+
+    // ---------------------------------------------------------------- app menu
+
+    private void showAppMenu(View anchor, App app) {
+        Uri uri = Uri.parse("package:" + app.pkg);
+        List<TextView> rows = new ArrayList<>();
+        rows.add(menuRow("Переместить", () -> startMove(app.pkg)));
+        rows.add(menuRow("Скрыть", () -> hideApp(app.pkg)));
+        rows.add(menuRow("Удалить", () -> launch(new Intent(Intent.ACTION_DELETE, uri))));
+        rows.add(menuRow("О приложении", () -> launch(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, uri))));
+        showMenu(anchor, rows);
+    }
+
+    private void startMove(String pkg) {
+        movingPkg = pkg;
+        focusedPkg = pkg;
+        layoutApps();
+        Toast.makeText(this, "Двигайте стрелками, OK — готово", Toast.LENGTH_LONG).show();
+    }
+
+    /** Swap the moving app with its neighbour: ±1 along the row, ±cols to the row above/below. */
+    private void moveApp(int step) {
+        int i = order.indexOf(movingPkg), j = i + step;
+        if (i < 0 || j < 0 || j >= order.size()) return;
+        Collections.swap(order, i, j);
+        saveOrder();
+        layoutApps();
+    }
+
+    private void hideApp(String pkg) {
+        userHidden.add(pkg);
+        order.remove(pkg);
+        if (pkg.equals(focusedPkg)) focusedPkg = null;
+        saveOrder();
+        layoutApps();
+    }
+
+    private void showHidden(View anchor) {
+        List<App> list = new ArrayList<>();
+        for (String p : userHidden) if (apps.containsKey(p)) list.add(apps.get(p));
+        Collections.sort(list, (x, y) -> x.label.compareToIgnoreCase(y.label));
+        List<TextView> rows = new ArrayList<>();
+        for (App a : list) rows.add(menuRow(a.label, () -> {
+            userHidden.remove(a.pkg);
+            order.add(a.pkg);
+            saveOrder();
+            layoutApps();
+        }));
+        if (!rows.isEmpty()) showMenu(anchor, rows);
     }
 
     /** A 16:9 card with the app's banner; the name shows under it while focused. */
@@ -444,6 +585,7 @@ public class MainActivity extends Activity {
         ring.setStroke(dp(2), 0xE6FFFFFF);
         ring.setOrientation(GradientDrawable.Orientation.TL_BR);
         ring.setColors(new int[]{0x26FFFFFF, 0x00FFFFFF, 0x00FFFFFF});
+        if (app.pkg.equals(movingPkg)) ring.setStroke(dp(4), 0xFF4DA3FF);
         View shine = new View(this);
         shine.setBackground(ring);
         shine.setAlpha(0f);
@@ -462,6 +604,7 @@ public class MainActivity extends Activity {
                 .addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
                 .setComponent(app.component)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)));
+        card.setOnLongClickListener(v -> { showAppMenu(v, app); return true; });
         card.setOnFocusChangeListener((v, has) -> {
             float s = has ? (inDock ? 1.12f : 1.1f) : 1f;
             v.animate().scaleX(s).scaleY(s).translationZ(has ? dp(14) : 0)
@@ -471,6 +614,7 @@ public class MainActivity extends Activity {
             label.animate().alpha(has ? 1f : 0f).translationY(has ? dp(4) : 0).setDuration(200).start();
             if (!has) return;
             lastFocusedId = v.getId();
+            focusedPkg = app.pkg;
             if (inDock) {
                 title.setText(app.label);
                 title.animate().alpha(1f).setDuration(200).start();
@@ -491,14 +635,16 @@ public class MainActivity extends Activity {
     /** Explicit D-pad targets: one row per press, ends of rows and of the top bar don't wrap. */
     private void wireFocus() {
         int d = dockCards.size(), g = gridCards.size();
-        for (int i = 0; i < pills.size(); i++) {
-            View p = pills.get(i);
-            p.setNextFocusLeftId(i == 0 ? p.getId() : pills.get(i - 1).getId());
-            p.setNextFocusRightId(i == pills.size() - 1 ? p.getId() : pills.get(i + 1).getId());
+        List<View> top = new ArrayList<>();
+        for (View p : pills) if (p.getVisibility() == View.VISIBLE) top.add(p);
+        for (int i = 0; i < top.size(); i++) {
+            View p = top.get(i);
+            p.setNextFocusLeftId(i == 0 ? p.getId() : top.get(i - 1).getId());
+            p.setNextFocusRightId(i == top.size() - 1 ? p.getId() : top.get(i + 1).getId());
             p.setNextFocusUpId(p.getId());
             p.setNextFocusDownId(d > 0 ? dockCards.get(Math.min(d - 1, d / 2)).getId() : p.getId());
         }
-        int topId = pills.get(0).getId();
+        int topId = top.get(0).getId();
         for (int i = 0; i < d; i++) {
             View c = dockCards.get(i);
             c.setNextFocusUpId(topId);
@@ -536,6 +682,30 @@ public class MainActivity extends Activity {
     // ---------------------------------------------------------------- inputs
 
     private void showInputs(View anchor) {
+        List<TextView> rows = new ArrayList<>();
+
+        TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
+        List<TvInputInfo> inputs = new ArrayList<>();
+        if (tim != null) for (TvInputInfo t : tim.getTvInputList()) {
+            if (t.isPassthroughInput() && !t.isHidden(this)) inputs.add(t);
+        }
+        Collections.sort(inputs, (x, y) -> inputLabel(x).compareToIgnoreCase(inputLabel(y)));
+        for (TvInputInfo t : inputs) {
+            rows.add(menuRow(inputLabel(t), () -> {
+                Intent i = new Intent(Intent.ACTION_VIEW, TvContract.buildChannelUriForPassthroughInput(t.getId()));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                if (!launch(i)) openPackage(inputPickerPkg);
+            }));
+        }
+        if (isInstalled(liveTvPkg)) rows.add(menuRow("Live TV", () -> openPackage(liveTvPkg)));
+        if (inputs.isEmpty() && isInstalled(inputPickerPkg)) rows.add(menuRow("All sources…", () -> openPackage(inputPickerPkg)));
+
+        if (rows.isEmpty()) rows.add(menuRow("Настройки", () -> launch(new Intent(Settings.ACTION_SETTINGS))));
+        showMenu(anchor, rows);
+    }
+
+    /** A dropdown of rows under `anchor`; picking a row closes it and runs the row's action. */
+    private void showMenu(View anchor, List<TextView> rows) {
         LinearLayout list = new LinearLayout(this);
         list.setOrientation(LinearLayout.VERTICAL);
         list.setPadding(dp(8), dp(8), dp(8), dp(8));
@@ -546,25 +716,6 @@ public class MainActivity extends Activity {
         list.setBackground(bg);
 
         PopupWindow pw = new PopupWindow(list, dp(200), -2, true);
-        List<TextView> rows = new ArrayList<>();
-
-        TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
-        List<TvInputInfo> inputs = new ArrayList<>();
-        if (tim != null) for (TvInputInfo t : tim.getTvInputList()) {
-            if (t.isPassthroughInput() && !t.isHidden(this)) inputs.add(t);
-        }
-        Collections.sort(inputs, (x, y) -> inputLabel(x).compareToIgnoreCase(inputLabel(y)));
-        for (TvInputInfo t : inputs) {
-            rows.add(inputRow(inputLabel(t), () -> {
-                Intent i = new Intent(Intent.ACTION_VIEW, TvContract.buildChannelUriForPassthroughInput(t.getId()));
-                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                if (!launch(i)) openPackage(inputPickerPkg);
-            }));
-        }
-        if (isInstalled(liveTvPkg)) rows.add(inputRow("Live TV", () -> openPackage(liveTvPkg)));
-        if (inputs.isEmpty() && isInstalled(inputPickerPkg)) rows.add(inputRow("All sources…", () -> openPackage(inputPickerPkg)));
-
-        if (rows.isEmpty()) rows.add(inputRow("Settings", () -> launch(new Intent(Settings.ACTION_SETTINGS))));
         for (TextView r : rows) {
             r.setOnClickListener(v -> { pw.dismiss(); ((Runnable) v.getTag()).run(); });
             list.addView(r, new LinearLayout.LayoutParams(-1, dp(36)));
@@ -578,9 +729,15 @@ public class MainActivity extends Activity {
         }
         pw.setOutsideTouchable(true);
         pw.setElevation(dp(16));
-        pw.setOnDismissListener(() -> { inputsPopup = null; anchor.requestFocus(); });
-        inputsPopup = pw;
-        pw.showAsDropDown(anchor, 0, dp(8), Gravity.START);
+        pw.setOnDismissListener(() -> { menu = null; anchor.requestFocus(); });
+        menu = pw;
+        // Below the anchor, or above it when it sits too low (the dock) for the menu to fit.
+        list.measure(View.MeasureSpec.makeMeasureSpec(dp(200), View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED);
+        int[] at = new int[2];
+        anchor.getLocationOnScreen(at);
+        int below = at[1] + anchor.getHeight() + dp(8);
+        boolean fits = below + list.getMeasuredHeight() <= getResources().getDisplayMetrics().heightPixels;
+        pw.showAtLocation(anchor, Gravity.NO_GRAVITY, at[0], fits ? below : at[1] - list.getMeasuredHeight() - dp(8));
         rows.get(0).requestFocus();
     }
 
@@ -590,7 +747,7 @@ public class MainActivity extends Activity {
         return String.valueOf(c);
     }
 
-    private TextView inputRow(String label, Runnable action) {
+    private TextView menuRow(String label, Runnable action) {
         TextView r = text(13, "sans-serif", Color.WHITE);
         r.setText(label);
         r.setTag(action);
@@ -614,7 +771,7 @@ public class MainActivity extends Activity {
     private void updateClock() {
         Calendar now = Calendar.getInstance();
         int h = now.get(Calendar.HOUR_OF_DAY);
-        greeting.setText(h < 5 ? "GOOD NIGHT" : h < 12 ? "GOOD MORNING" : h < 17 ? "GOOD AFTERNOON" : "GOOD EVENING");
+        greeting.setText(h < 5 ? "ДОБРОЙ НОЧИ" : h < 12 ? "ДОБРОЕ УТРО" : h < 17 ? "ДОБРЫЙ ДЕНЬ" : "ДОБРЫЙ ВЕЧЕР");
         boolean is24 = android.text.format.DateFormat.is24HourFormat(this);
         clock.setText(new SimpleDateFormat(is24 ? "H:mm" : "h:mm", Locale.getDefault()).format(now.getTime()));
         ampm.setText(is24 ? "" : (h < 12 ? "AM" : "PM"));
@@ -622,16 +779,137 @@ public class MainActivity extends Activity {
     }
 
     private void updateWifi() {
-        String name = "Wi-Fi";
-        try {
-            WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
-            if (wm != null && wm.getConnectionInfo() != null) {
-                String s = wm.getConnectionInfo().getSSID();
+        // Connectivity decides online/offline: with location off the SSID and network id are hidden.
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        NetworkCapabilities nc = cm == null ? null : cm.getNetworkCapabilities(cm.getActiveNetwork());
+        String name = "Нет сети";
+        if (nc != null && nc.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) name = "Ethernet";
+        else if (nc != null) {
+            name = "Wi-Fi";
+            try {
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+                String s = wm == null || wm.getConnectionInfo() == null ? null : wm.getConnectionInfo().getSSID();
                 if (s != null && !s.contains("unknown ssid")) name = s.replace("\"", "");
-                if (wm.getConnectionInfo().getNetworkId() == -1) name = "Offline";
-            }
-        } catch (SecurityException ignored) { }
+            } catch (SecurityException ignored) { }
+        }
         wifiPill.setText("◉  " + name);
+    }
+
+    // ---------------------------------------------------------------- weather
+
+    /** Locate the TV (newest known fix, else ask for one), then fetch; falls back to the last place. */
+    private void updateWeather() {
+        handler.removeCallbacks(refreshWeather);
+        // Until the first reading arrives (e.g. location just switched on), retry every minute.
+        handler.postDelayed(refreshWeather, weather.getVisibility() == View.VISIBLE ? WEATHER_INTERVAL_MS : 60 * 1000);
+        weatherAt = SystemClock.elapsedRealtime();
+        LocationManager lm = (LocationManager) getSystemService(LOCATION_SERVICE);
+        try {
+            List<String> providers = lm.getProviders(true);
+            Location best = null;
+            for (String p : providers) {
+                Location l = lm.getLastKnownLocation(p);
+                if (l != null && (best == null || l.getTime() > best.getTime())) best = l;
+            }
+            if (best != null) { fetchWeather(best.getLatitude(), best.getLongitude()); return; }
+            String p = providers.contains("fused") ? "fused"
+                    : providers.contains(LocationManager.NETWORK_PROVIDER) ? LocationManager.NETWORK_PROVIDER : null;
+            if (p != null) {
+                lm.getCurrentLocation(p, null, getMainExecutor(), l -> {
+                    if (l != null) fetchWeather(l.getLatitude(), l.getLongitude());
+                    else fetchSavedWeather();
+                });
+                return;
+            }
+        } catch (RuntimeException ignored) { } // no permission or location off
+        fetchSavedWeather();
+    }
+
+    private void fetchSavedWeather() {
+        SharedPreferences p = getPreferences(MODE_PRIVATE);
+        if (p.contains("w_lat")) fetchWeather(p.getFloat("w_lat", 0), p.getFloat("w_lon", 0));
+    }
+
+    private void fetchWeather(double lat, double lon) {
+        new Thread(() -> {
+            try {
+                String city = cityName(lat, lon);
+                JSONObject cur = new JSONObject(httpGet(String.format(Locale.US,
+                        "https://api.open-meteo.com/v1/forecast?latitude=%.3f&longitude=%.3f"
+                                + "&current=temperature_2m,weather_code,is_day&timezone=auto", lat, lon)))
+                        .getJSONObject("current");
+                int code = cur.getInt("weather_code");
+                int temp = (int) Math.round(cur.getDouble("temperature_2m"));
+                boolean day = cur.optInt("is_day", 1) == 1;
+                runOnUiThread(() -> {
+                    getPreferences(MODE_PRIVATE).edit()
+                            .putString("w_city", city).putInt("w_code", code).putInt("w_temp", temp)
+                            .putBoolean("w_day", day).putFloat("w_lat", (float) lat).putFloat("w_lon", (float) lon)
+                            .apply();
+                    showWeather();
+                });
+            } catch (Exception ignored) { } // offline: keep showing the last reading
+        }).start();
+    }
+
+    /** City name in Russian: the system geocoder, else BigDataCloud, else the last known name. */
+    private String cityName(double lat, double lon) {
+        try {
+            List<Address> found = new Geocoder(this, new Locale("ru")).getFromLocation(lat, lon, 1);
+            if (found != null && !found.isEmpty()) {
+                Address a = found.get(0);
+                String n = a.getLocality() != null ? a.getLocality()
+                        : a.getSubAdminArea() != null ? a.getSubAdminArea() : a.getAdminArea();
+                if (n != null) return n;
+            }
+        } catch (Exception ignored) { }
+        try {
+            JSONObject j = new JSONObject(httpGet(String.format(Locale.US,
+                    "https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=%.3f&longitude=%.3f&localityLanguage=ru",
+                    lat, lon)));
+            String n = j.optString("city");
+            if (n.isEmpty()) n = j.optString("locality");
+            if (!n.isEmpty()) return n;
+        } catch (Exception ignored) { }
+        return getPreferences(MODE_PRIVATE).getString("w_city", "");
+    }
+
+    private static String httpGet(String url) throws java.io.IOException {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setConnectTimeout(10000);
+        c.setReadTimeout(10000);
+        try (Scanner s = new Scanner(c.getInputStream(), "UTF-8").useDelimiter("\\A")) {
+            return s.hasNext() ? s.next() : "";
+        } finally {
+            c.disconnect();
+        }
+    }
+
+    /** "Иркутск   ❄️  −15°" from the last saved reading. */
+    private void showWeather() {
+        SharedPreferences p = getPreferences(MODE_PRIVATE);
+        if (!p.contains("w_temp")) { weather.setVisibility(View.GONE); return; }
+        int t = p.getInt("w_temp", 0);
+        String temp = (t > 0 ? "+" : t < 0 ? "−" : "") + Math.abs(t) + "°";
+        String city = p.getString("w_city", "");
+        weather.setText((city.isEmpty() ? "" : city + "   ")
+                + weatherIcon(p.getInt("w_code", -1), p.getBoolean("w_day", true)) + "  " + temp);
+        weather.setVisibility(View.VISIBLE);
+    }
+
+    /** WMO weather code (as used by Open-Meteo) to an emoji. */
+    private static String weatherIcon(int code, boolean day) {
+        if (code == 0) return day ? "☀️" : "🌙";
+        if (code == 1) return day ? "🌤️" : "🌙";
+        if (code == 2) return day ? "⛅" : "☁️";
+        if (code == 3) return "☁️";
+        if (code == 45 || code == 48) return "🌫️";
+        if (code >= 51 && code <= 57) return "🌦️";
+        if (code >= 61 && code <= 67) return "🌧️";
+        if ((code >= 71 && code <= 77) || code == 85 || code == 86) return "❄️";
+        if (code >= 80 && code <= 82) return "🌦️";
+        if (code >= 95) return "⛈️";
+        return "🌡️";
     }
 
     // ---------------------------------------------------------------- glow
@@ -825,6 +1103,20 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
+        // Moving an app: arrows shift it through dock and grid, OK or Back finishes.
+        if (movingPkg != null) {
+            int k = e.getKeyCode();
+            int step = k == KeyEvent.KEYCODE_DPAD_LEFT ? -1 : k == KeyEvent.KEYCODE_DPAD_RIGHT ? 1
+                    : k == KeyEvent.KEYCODE_DPAD_UP ? -cols : k == KeyEvent.KEYCODE_DPAD_DOWN ? cols : 0;
+            boolean done = k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER || k == KeyEvent.KEYCODE_BACK;
+            if (step != 0 || done) {
+                if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                    if (step != 0) moveApp(step);
+                    else { movingPkg = null; layoutApps(); }
+                }
+                return true;
+            }
+        }
         // Menu key on the remote opens the Inputs dropdown.
         if (e.getKeyCode() == KeyEvent.KEYCODE_MENU && e.getAction() == KeyEvent.ACTION_UP && !pills.isEmpty()) {
             showInputs(pills.get(0));

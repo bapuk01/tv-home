@@ -1,0 +1,19 @@
+# Chromecast with Google TV 2020 (sabrina), Android 14, build UTTC.250917.004
+# Apply: tools\windows\disable.ps1 examples\chromecast-google-tv-2020\debloat.txt
+# Undo:  tools\windows\restore.ps1 examples\chromecast-google-tv-2020\debloat.txt
+# Everything is DISABLED for user 0, never uninstalled. Voice search (katniss) is kept.
+
+# Unused Google apps
+com.google.android.play.games                   # Play Games
+com.google.android.apps.education.cast2class    # Cast for Education
+com.netflix.tokenmanager                        # Netflix sign-in helper (no Netflix installed)
+com.android.printspooler                        # printing
+com.google.android.syncadapters.calendar        # calendar sync
+com.google.android.marvin.talkback              # TalkBack screen reader
+
+# Feedback, logging, ads
+com.google.android.feedback                     # "send feedback"
+com.android.tv.feedbackconsent                  # feedback consent screen
+com.google.android.tv.remotecontrol.logging     # remote-control usage logging
+com.google.android.adservices.api               # ad personalisation
+com.google.android.ext.adservices.api           # ad personalisation (mainline)
