@@ -320,10 +320,10 @@ public class MainActivity extends Activity {
         clockRow.addView(ampm, llp(-2, -2, dp(6), 0, 0, dp(8)));
         left.addView(clockRow, llp(-2, -2, 0, dp(2), 0, dp(2)));
 
-        date = text(10, "sans-serif-medium", 0x99FFFFFF);
+        date = text(16, "sans-serif-medium", 0xF2FFFFFF);
         date.setSingleLine(true);
         date.setPadding(0, 0, dp(16), 0); // letterSpacing is not counted in the measured width
-        date.setLetterSpacing(0.22f);
+        date.setLetterSpacing(0.12f);
         left.addView(date);
 
         weather = text(23, "sans-serif-light", Color.WHITE);
@@ -331,6 +331,8 @@ public class MainActivity extends Activity {
         weather.setVisibility(View.GONE);
         left.addView(weather, llp(-2, -2, 0, dp(10), 0, 0));
         for (TextView t : new TextView[]{greeting, clock, ampm, date, weather}) t.setShadowLayer(dp(10), 0, dp(1), 0xB3000000);
+        // Small text over bright photos: a tight, dark shadow keeps the letters' edges readable.
+        date.setShadowLayer(dp(3), 0, dp(1), 0xF2000000);
         header.addView(left, new FrameLayout.LayoutParams(dp(420), -2, Gravity.START | Gravity.TOP));
 
         LinearLayout right = new LinearLayout(this);
