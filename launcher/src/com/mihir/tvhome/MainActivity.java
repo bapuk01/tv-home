@@ -75,7 +75,8 @@ import java.util.Set;
  * Apple TV style home screen: clock and weather top-left, pills top-right, the focused dock app's
  * name over an ambient glow, a dock of pinned apps, and every other app in a grid that scrolls up on
  * Down. Long-press a tile to move, hide, uninstall or inspect it. Plain framework views only (no
- * AndroidX); the only network use is the weather (Open-Meteo), refreshed while the home is visible.
+ * AndroidX); the only network use is the weather (Open-Meteo, or met.no as a fallback), refreshed
+ * while the home is visible.
  */
 public class MainActivity extends Activity {
 
@@ -718,8 +719,8 @@ public class MainActivity extends Activity {
                 if (!launch(i)) openPackage(inputPickerPkg);
             }));
         }
-        if (isInstalled(liveTvPkg)) rows.add(menuRow("Live TV", () -> openPackage(liveTvPkg)));
-        if (inputs.isEmpty() && isInstalled(inputPickerPkg)) rows.add(menuRow("All sources…", () -> openPackage(inputPickerPkg)));
+        if (isInstalled(liveTvPkg)) rows.add(menuRow("Эфирное ТВ", () -> openPackage(liveTvPkg)));
+        if (inputs.isEmpty() && isInstalled(inputPickerPkg)) rows.add(menuRow("Все источники…", () -> openPackage(inputPickerPkg)));
 
         if (rows.isEmpty()) rows.add(menuRow("Настройки", () -> launch(new Intent(Settings.ACTION_SETTINGS))));
         showMenu(anchor, rows);
@@ -845,7 +846,7 @@ public class MainActivity extends Activity {
                 });
                 return;
             }
-        } catch (RuntimeException ignored) { } // no permission or location off
+        } catch (RuntimeException e) { android.util.Log.w("tvhome", "location", e); } // no permission or location off
         fetchSavedWeather();
     }
 
@@ -856,24 +857,52 @@ public class MainActivity extends Activity {
 
     private void fetchWeather(double lat, double lon) {
         new Thread(() -> {
-            try {
-                String city = cityName(lat, lon);
-                JSONObject cur = new JSONObject(httpGet(String.format(Locale.US,
-                        "https://api.open-meteo.com/v1/forecast?latitude=%.3f&longitude=%.3f"
-                                + "&current=temperature_2m,weather_code,is_day&timezone=auto", lat, lon)))
-                        .getJSONObject("current");
-                int code = cur.getInt("weather_code");
-                int temp = (int) Math.round(cur.getDouble("temperature_2m"));
-                boolean day = cur.optInt("is_day", 1) == 1;
-                runOnUiThread(() -> {
-                    getPreferences(MODE_PRIVATE).edit()
-                            .putString("w_city", city).putInt("w_code", code).putInt("w_temp", temp)
-                            .putBoolean("w_day", day).putFloat("w_lat", (float) lat).putFloat("w_lon", (float) lon)
-                            .apply();
-                    showWeather();
-                });
-            } catch (Exception ignored) { } // offline: keep showing the last reading
+            // Open-Meteo first; met.no when it's unreachable (some ISPs block Open-Meteo's servers).
+            int[] w = null; // {WMO code, temperature, is day}
+            try { w = openMeteo(lat, lon); } catch (Exception e) { android.util.Log.w("tvhome", "open-meteo: " + e); }
+            if (w == null) {
+                try { w = metNo(lat, lon); } catch (Exception e) { android.util.Log.w("tvhome", "met.no: " + e); }
+            }
+            if (w == null) return; // offline: keep showing the last reading
+            String city = cityName(lat, lon);
+            int code = w[0], temp = w[1];
+            boolean day = w[2] == 1;
+            runOnUiThread(() -> {
+                getPreferences(MODE_PRIVATE).edit()
+                        .putString("w_city", city).putInt("w_code", code).putInt("w_temp", temp)
+                        .putBoolean("w_day", day).putFloat("w_lat", (float) lat).putFloat("w_lon", (float) lon)
+                        .apply();
+                showWeather();
+            });
         }).start();
+    }
+
+    private static int[] openMeteo(double lat, double lon) throws Exception {
+        JSONObject cur = new JSONObject(httpGet(String.format(Locale.US,
+                "https://api.open-meteo.com/v1/forecast?latitude=%.3f&longitude=%.3f"
+                        + "&current=temperature_2m,weather_code,is_day&timezone=auto", lat, lon)))
+                .getJSONObject("current");
+        return new int[]{cur.getInt("weather_code"), (int) Math.round(cur.getDouble("temperature_2m")),
+                cur.optInt("is_day", 1)};
+    }
+
+    /** Norwegian Meteorological Institute; its symbol codes are mapped onto the WMO codes above. */
+    private static int[] metNo(double lat, double lon) throws Exception {
+        JSONObject data = new JSONObject(httpGet(String.format(Locale.US,
+                "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=%.3f&lon=%.3f", lat, lon)))
+                .getJSONObject("properties").getJSONArray("timeseries").getJSONObject(0).getJSONObject("data");
+        double temp = data.getJSONObject("instant").getJSONObject("details").getDouble("air_temperature");
+        String s = data.getJSONObject("next_1_hours").getJSONObject("summary").getString("symbol_code");
+        int code = s.contains("thunder") ? 95
+                : s.contains("snow") ? 71
+                : s.contains("sleet") ? 66
+                : s.contains("rainshowers") ? 80
+                : s.contains("rain") ? 61
+                : s.startsWith("fog") ? 45
+                : s.startsWith("cloudy") ? 3
+                : s.startsWith("partlycloudy") ? 2
+                : s.startsWith("fair") ? 1 : 0;
+        return new int[]{code, (int) Math.round(temp), s.endsWith("_night") ? 0 : 1};
     }
 
     /** City name in Russian: the system geocoder, else BigDataCloud, else the last known name. */
@@ -900,6 +929,7 @@ public class MainActivity extends Activity {
 
     private static String httpGet(String url) throws java.io.IOException {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setRequestProperty("User-Agent", "tv-home/1.0 github.com/bapuk01/tv-home"); // met.no requires one
         c.setConnectTimeout(10000);
         c.setReadTimeout(10000);
         try (Scanner s = new Scanner(c.getInputStream(), "UTF-8").useDelimiter("\\A")) {

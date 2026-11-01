@@ -9,24 +9,28 @@ Claude Code with one prompt, or do it by hand with the scripts here.
 On a 2 GB TCL Google TV this disabled 25 bloat apps and cut the home screen's memory use from
 192 MB to 83 MB. Everything is reversible: packages are disabled, never uninstalled.
 
-## Эта версия (Chromecast with Google TV, Windows, по-русски)
+## Эта версия (Chromecast with Google TV, TCL, Windows, по-русски)
 
 Форк [mihirgupta0900/tv-home](https://github.com/mihirgupta0900/tv-home), доработанный для
-Chromecast with Google TV 2020 (Android 14) и сборки на Windows.
+Chromecast with Google TV 2020 и телевизора TCL Smart TV Pro G08 (оба на Android 14 / Google TV)
+и сборки на Windows. Одна и та же сборка работает на обоих.
 
 - **Русский интерфейс**: «Доброе утро», «Все приложения», «Настройки», дата по-русски.
 - **Погода под датой**: «Иркутск ❄️ −15°». Город определяется по местоположению приставки
-  (включите: Настройки → Конфиденциальность → Местоположение), погода с Open-Meteo, без ключей.
+  (включите: Настройки → Конфиденциальность → Местоположение), погода с Open-Meteo, а если он недоступен — с met.no; ключи не нужны.
   Обновляется раз в 30 минут, пока открыт главный экран.
 - **Долгое нажатие OK на приложении** открывает меню:
   - **Переместить**: стрелками по всему экрану, включая нижний ряд; OK — готово. Порядок сохраняется.
   - **Скрыть**: убирает с главного экрана; вернуть через кнопку «Скрытые» наверху.
   - **Удалить**: системное окно удаления.
   - **О приложении**: страница приложения в настройках Android.
-- **Кнопка «Источники»** (HDMI-входы) показывается только там, где входы есть; на Chromecast её нет.
+- **Кнопка «Источники»** показывается только там, где есть входы: на TCL это HDMI 1–4, подписанные
+  устройства и «Эфирное ТВ»; на Chromecast её нет.
+- **Плавная прокрутка** на слабом железе: фон рисуется в один слой, без тяжёлых теней.
 - **Сборка и установка на Windows** без Gradle: [launcher/build.ps1](launcher/build.ps1),
-  [tools/windows/](tools/windows/) и список для Chromecast в
-  [examples/chromecast-google-tv-2020/](examples/chromecast-google-tv-2020/).
+  [tools/windows/](tools/windows/) и списки отключаемых приложений для
+  [Chromecast](examples/chromecast-google-tv-2020/) и [TCL G08](examples/tcl-google-tv-g08/).
+  У телевизора TCL отладка работает через обычный порт: `adb connect <ip>:5555`, без кода.
 
 Нужны JDK 17, Android SDK (build-tools 34.0.0, platform android-34) и
 [Platform Tools](https://developer.android.com/tools/releases/platform-tools) с `adb`.

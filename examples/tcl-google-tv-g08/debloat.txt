@@ -1,0 +1,49 @@
+# TCL Smart TV Pro (device G08), Android 14, Google TV, build UTT2.250416.001
+# Apply: tools\windows\disable.ps1 examples\tcl-google-tv-g08\debloat.txt -Device <ip>:5555
+# Undo:  tools\windows\restore.ps1 examples\tcl-google-tv-g08\debloat.txt -Device <ip>:5555
+# Everything is DISABLED for user 0, never uninstalled. Live TV, inputs, remote, keyboard, Dolby and
+# MediaTek services are left alone. Kept here: casting, USB media player, game bar (commented out).
+
+# TCL ads and telemetry
+com.tcl.ttvs                          # TCL core service: analytics, account sync
+com.tcl.usercenter                    # TCL account / phone binding
+com.tcl.messagebox                    # promo message popups
+com.tcl.esticker                      # on-screen promo stickers
+com.tcl.partnercustomizer             # partner app rows / promos for the stock launcher
+com.tcl.logkit                        # log collection
+com.tcl.exhibit                       # shop demo mode
+com.android.tv.feedbackconsent        # feedback consent screen
+com.google.android.feedback           # "send feedback"
+
+# TCL content
+com.tcl.channelplus                   # "TCL Channel" app
+com.tcl.waterfall.overseas            # the "TCL" content tab
+com.tcl.tv.tclhome_passive            # TCL home background service
+
+# TCL background clutter
+com.tcl.guard                         # cleaner / "TV guard"
+com.tcl.hotelmenu                     # hotel mode
+com.tcl.repairguide                   # repair guide
+com.tcl.ocean.instructions            # on-screen instructions
+tv.mopa.ginga                         # Ginga interactive TV (Brazil), unused elsewhere
+
+# Google extras
+com.google.android.apps.tv.dreamx     # ambient screensaver (falls back to basic)
+com.google.android.play.games         # Play Games
+com.google.android.syncadapters.calendar
+com.netflix.tokenmanager              # Netflix sign-in helper (Netflix itself is disabled)
+com.android.adservices.api            # ad personalisation
+com.google.android.videos             # Google TV / Play Movies
+
+# Accessibility (not used here)
+com.google.android.marvin.talkback    # TalkBack screen reader
+com.tcl.hearaid                       # hearing aid audio
+
+# Kept on this TV — uncomment to disable
+# com.google.android.apps.mediashell  # Chromecast built-in
+# com.tcl.miracast                    # screen mirroring
+# com.tcl.airplay2                    # AirPlay
+# com.mediatek.AirplayAPK
+# com.mediatek.airplaydaemon
+# com.tcl.ui_mediaCenter              # USB media player
+# com.tcl.gamebar                     # game bar
