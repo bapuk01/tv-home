@@ -304,7 +304,7 @@ public class MainActivity extends Activity {
 
         LinearLayout left = new LinearLayout(this);
         left.setOrientation(LinearLayout.VERTICAL);
-        greeting = text(10, "sans-serif-medium", 0xB3FFFFFF);
+        greeting = text(12, "sans-serif-medium", 0xB3FFFFFF);
         greeting.setLetterSpacing(0.25f);
         greeting.setSingleLine(true);
         greeting.setPadding(0, 0, dp(16), 0);
@@ -325,7 +325,7 @@ public class MainActivity extends Activity {
         date.setLetterSpacing(0.22f);
         left.addView(date);
 
-        weather = text(15, "sans-serif-light", Color.WHITE);
+        weather = text(18, "sans-serif-light", Color.WHITE);
         weather.setSingleLine(true);
         weather.setVisibility(View.GONE);
         left.addView(weather, llp(-2, -2, 0, dp(10), 0, 0));
