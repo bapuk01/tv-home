@@ -110,7 +110,8 @@ public class MainActivity extends Activity {
     private LinearLayout grid;
     private View glow;
     private ImageView wallBack, wallFront;
-    private View gridShade;
+    private float shade;            // 0..1 grid dimming of the photo, see setShade
+    private ValueAnimator shadeAnim;
     private String[] wallpapers = new String[0];
     private int wallIndex = -1;
     private long wallChangedAt;
@@ -123,6 +124,10 @@ public class MainActivity extends Activity {
     private TextView greeting, clock, ampm, date, weather, title, wifiPill, hiddenPill, appsLabel;
     private int glowColor = 0xFF3A3A3A;
     private ValueAnimator glowAnim;
+    // The glow is drawn at 1/10 of the screen and stretched: it's a soft gradient, so it looks the
+    // same, but the GPU samples a tiny texture instead of evaluating a gradient for every pixel.
+    private final Bitmap glowBitmap = Bitmap.createBitmap(192, 108, Bitmap.Config.ARGB_8888);
+    private final Canvas glowCanvas = new Canvas(glowBitmap);
     private int lastFocusedId = View.NO_ID;
     private boolean firstShow = true;
     private int packageSeq;
@@ -150,6 +155,10 @@ public class MainActivity extends Activity {
                 View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
                         | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
         setContentView(buildUi());
+        getWindow().setBackgroundDrawable(null); // the root view paints black until the photo is in
+        // 16-bit window (the photos are 16-bit already): half the memory traffic per frame, which
+        // matters when the system composes the window on the GPU instead of the display hardware.
+        getWindow().setFormat(android.graphics.PixelFormat.RGB_565);
         loadApps();
         showWeather();
 
@@ -221,25 +230,19 @@ public class MainActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
 
+        // The TV's GPU manages only a few full-screen fills per frame at 60 fps, so the background is
+        // just the photo (scrim baked in, grid dimming as a colour filter) and, on the dock, the glow.
         // Wallpaper: two stacked layers so a new photo can crossfade in over the old one.
         wallBack = wallpaperLayer();
         wallFront = wallpaperLayer();
         root.addView(wallBack, new FrameLayout.LayoutParams(-1, -1));
         root.addView(wallFront, new FrameLayout.LayoutParams(-1, -1));
-        // Scrim: darker at the top (clock, pills) and bottom (dock) so text stays readable.
-        View scrim = new View(this);
-        scrim.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{0xB3000000, 0x40000000, 0x26000000, 0x8C000000, 0xE6000000}));
-        root.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
-        gridShade = new View(this);
-        gridShade.setBackgroundColor(0xB3000000);
-        gridShade.setAlpha(0f);
-        root.addView(gridShade, new FrameLayout.LayoutParams(-1, -1));
         try {
             wallpapers = getAssets().list("wallpapers");
         } catch (java.io.IOException ignored) { }
 
-        glow = new View(this);
+        glow = flatView();
+        glow.setBackground(new android.graphics.drawable.BitmapDrawable(getResources(), glowBitmap));
         root.addView(glow, new FrameLayout.LayoutParams(-1, -1));
         setGlow(glowColor);
 
@@ -615,7 +618,8 @@ public class MainActivity extends Activity {
         card.setOnLongClickListener(v -> { showAppMenu(v, app); return true; });
         card.setOnFocusChangeListener((v, has) -> {
             float s = has ? (inDock ? 1.12f : 1.1f) : 1f;
-            v.animate().scaleX(s).scaleY(s).translationZ(has ? dp(14) : 0)
+            // No elevation shadow: on the Chromecast's GPU it cost ~25% of the frames while scrolling.
+            v.animate().scaleX(s).scaleY(s)
                     .setInterpolator(has ? new OvershootInterpolator(1.8f) : new DecelerateInterpolator())
                     .setDuration(has ? 320 : 200).start();
             shine.animate().alpha(has ? 1f : 0f).setDuration(160).start();
@@ -630,7 +634,7 @@ public class MainActivity extends Activity {
                 fadeGlow(1f);
                 scroll.smoothScrollTo(0, 0);
             } else {
-                fadeGlow(0.35f);
+                fadeGlow(0f);
                 title.animate().alpha(0f).setDuration(200).start();
                 scrollToRow(box);
             }
@@ -939,9 +943,12 @@ public class MainActivity extends Activity {
         GradientDrawable g = new GradientDrawable();
         g.setGradientType(GradientDrawable.RADIAL_GRADIENT);
         g.setGradientCenter(0.5f, 0.78f);
-        g.setGradientRadius(getResources().getDisplayMetrics().widthPixels * 0.62f);
+        g.setGradientRadius(glowBitmap.getWidth() * 0.62f);
         g.setColors(new int[]{withAlpha(color, 0.5f), withAlpha(color, 0.14f), Color.TRANSPARENT});
-        glow.setBackground(g);
+        g.setBounds(0, 0, glowBitmap.getWidth(), glowBitmap.getHeight());
+        glowBitmap.eraseColor(Color.TRANSPARENT);
+        g.draw(glowCanvas);
+        glow.invalidate();
     }
 
     private void animateGlow(int to) {
@@ -952,10 +959,26 @@ public class MainActivity extends Activity {
         glowAnim.start();
     }
 
+    /** 1 on the dock and top bar, 0 in the grid: the glow fades out (and stops being drawn). */
     private void fadeGlow(float alpha) {
-        glow.animate().alpha(alpha).setDuration(300).start();
+        // Fading out quickly takes this full-screen layer off the GPU for most of the scroll down.
+        glow.animate().alpha(alpha).setDuration(alpha < 1f ? 120 : 300).start();
         // The grid sits over the photo's busiest middle part, so dim it while browsing apps.
-        gridShade.animate().alpha(alpha < 1f ? 1f : 0f).setDuration(300).start();
+        float target = alpha < 1f ? 1f : 0f;
+        if (shadeAnim != null) shadeAnim.cancel();
+        shadeAnim = ValueAnimator.ofFloat(shade, target);
+        shadeAnim.setDuration(300);
+        shadeAnim.addUpdateListener(a -> setShade((float) a.getAnimatedValue()));
+        shadeAnim.start();
+    }
+
+    /** Dim the photo by drawing it through a black colour filter: no extra full-screen layer. */
+    private void setShade(float f) {
+        shade = f;
+        for (ImageView w : new ImageView[]{wallBack, wallFront}) {
+            if (f == 0f) w.clearColorFilter();
+            else w.setColorFilter(Color.argb(Math.round(f * 0xB3), 0, 0, 0), android.graphics.PorterDuff.Mode.SRC_ATOP);
+        }
     }
 
     // ---------------------------------------------------------------- wallpaper
@@ -964,6 +987,13 @@ public class MainActivity extends Activity {
         ImageView v = new ImageView(this);
         v.setScaleType(ImageView.ScaleType.CENTER_CROP);
         return v;
+    }
+
+    /** A single-fill view: non-overlapping, so fading it needs no full-screen offscreen buffer. */
+    private View flatView() {
+        return new View(this) {
+            @Override public boolean hasOverlappingRendering() { return false; }
+        };
     }
 
     /** Decode the next photo off the main thread, then crossfade it in over the current one. */
@@ -980,7 +1010,16 @@ public class MainActivity extends Activity {
             try (java.io.InputStream in = getAssets().open(name)) {
                 BitmapFactory.Options o = new BitmapFactory.Options();
                 o.inPreferredConfig = Bitmap.Config.RGB_565;
+                o.inMutable = true;
                 bm = BitmapFactory.decodeStream(in, null, o);
+                // Scrim, baked into the photo: darker at the top (clock, pills) and bottom (dock).
+                if (bm != null) {
+                    GradientDrawable scrim = new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                            new int[]{0xB3000000, 0x40000000, 0x26000000, 0x8C000000, 0xE6000000});
+                    scrim.setDither(true);
+                    scrim.setBounds(0, 0, bm.getWidth(), bm.getHeight());
+                    scrim.draw(new Canvas(bm));
+                }
             } catch (java.io.IOException ignored) { }
             Bitmap result = bm;
             runOnUiThread(() -> showWallpaper(result));
@@ -1001,6 +1040,7 @@ public class MainActivity extends Activity {
         wallFront.setAlpha(0f);
         wallFront.animate().alpha(1f).setDuration(firstWallpaper ? 600 : 2000).withEndAction(() -> {
             wallBack.setImageDrawable(null); // release the previous photo
+            root.setBackground(null);       // the photo covers the screen; skip the black fill under it
         }).start();
         firstWallpaper = false;
     }
