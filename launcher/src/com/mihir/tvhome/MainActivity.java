@@ -340,6 +340,8 @@ public class MainActivity extends Activity {
         right.setClipChildren(false);
         TextView inputs = pill("Источники", "⇥");
         inputs.setOnClickListener(v -> showInputs(v));
+        // Streaming boxes (Chromecast) have no HDMI inputs or tuner: nothing to switch to, so no pill.
+        if (!hasInputs()) inputs.setVisibility(View.GONE);
         wifiPill = pill("Wi-Fi", "◉");
         wifiPill.setOnClickListener(v -> launch(new Intent(Settings.ACTION_WIFI_SETTINGS)));
         // Only shown while something is hidden; lists the hidden apps so they can be brought back.
@@ -684,14 +686,23 @@ public class MainActivity extends Activity {
 
     // ---------------------------------------------------------------- inputs
 
-    private void showInputs(View anchor) {
-        List<TextView> rows = new ArrayList<>();
-
+    private List<TvInputInfo> passthroughInputs() {
         TvInputManager tim = (TvInputManager) getSystemService(TV_INPUT_SERVICE);
         List<TvInputInfo> inputs = new ArrayList<>();
         if (tim != null) for (TvInputInfo t : tim.getTvInputList()) {
             if (t.isPassthroughInput() && !t.isHidden(this)) inputs.add(t);
         }
+        return inputs;
+    }
+
+    private boolean hasInputs() {
+        return !passthroughInputs().isEmpty() || isInstalled(liveTvPkg) || isInstalled(inputPickerPkg);
+    }
+
+    private void showInputs(View anchor) {
+        List<TextView> rows = new ArrayList<>();
+
+        List<TvInputInfo> inputs = passthroughInputs();
         Collections.sort(inputs, (x, y) -> inputLabel(x).compareToIgnoreCase(inputLabel(y)));
         for (TvInputInfo t : inputs) {
             rows.add(menuRow(inputLabel(t), () -> {
@@ -1121,7 +1132,8 @@ public class MainActivity extends Activity {
             }
         }
         // Menu key on the remote opens the Inputs dropdown.
-        if (e.getKeyCode() == KeyEvent.KEYCODE_MENU && e.getAction() == KeyEvent.ACTION_UP && !pills.isEmpty()) {
+        if (e.getKeyCode() == KeyEvent.KEYCODE_MENU && e.getAction() == KeyEvent.ACTION_UP
+                && !pills.isEmpty() && pills.get(0).getVisibility() == View.VISIBLE) {
             showInputs(pills.get(0));
             return true;
         }

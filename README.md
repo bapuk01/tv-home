@@ -23,6 +23,7 @@ Chromecast with Google TV 2020 (Android 14) и сборки на Windows.
   - **Скрыть**: убирает с главного экрана; вернуть через кнопку «Скрытые» наверху.
   - **Удалить**: системное окно удаления.
   - **О приложении**: страница приложения в настройках Android.
+- **Кнопка «Источники»** (HDMI-входы) показывается только там, где входы есть; на Chromecast её нет.
 - **Сборка и установка на Windows** без Gradle: [launcher/build.ps1](launcher/build.ps1),
   [tools/windows/](tools/windows/) и список для Chromecast в
   [examples/chromecast-google-tv-2020/](examples/chromecast-google-tv-2020/).
