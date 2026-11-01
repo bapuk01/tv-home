@@ -27,10 +27,21 @@ Chromecast with Google TV 2020 и телевизора TCL Smart TV Pro G08 (о�
 - **Кнопка «Источники»** показывается только там, где есть входы: на TCL это HDMI 1–4, подписанные
   устройства и «Эфирное ТВ»; на Chromecast её нет.
 - **Плавная прокрутка** на слабом железе: фон рисуется в один слой, без тяжёлых теней.
+- **Заставка** после 15 минут простоя (во время фильма не включается): нарисованный пейзаж в тёплых
+  приглушённых тонах — горы, лес, небо. Он меняется по времени года, по настоящей высоте солнца над
+  вашим городом (рассвет, день, закат, ночь с луной в нужной фазе) и по погоде: облака, туман, идущий
+  снег или дождь. Поверх — часы, погода с ветром и влажностью, прогноз на 4 дня и календарь месяца
+  с выходными и праздниками. Текст понемногу сдвигается, чтобы не выжигать экран.
+  `install-launcher.ps1` включает её сам (`-ScreensaverMinutes 0` — не трогать заставку). Посмотреть
+  пейзаж для любой погоды без ожидания:
+  `adb shell am start -n com.mihir.tvhome/.ScenePreview --ei code 71 --ei season 0 --ef elev -20`
+  (параметры описаны в [ScenePreview.java](launcher/src/com/mihir/tvhome/ScenePreview.java)).
 - **Сборка и установка на Windows** без Gradle: [launcher/build.ps1](launcher/build.ps1),
   [tools/windows/](tools/windows/) и списки отключаемых приложений для
   [Chromecast](examples/chromecast-google-tv-2020/) и [TCL G08](examples/tcl-google-tv-g08/).
   У телевизора TCL отладка работает через обычный порт: `adb connect <ip>:5555`, без кода.
+- На Chromecast была включена настройка «Не выключать экран при зарядке» — с ней система никогда не
+  считает приставку простаивающей и заставка не запускается. Установка её выключает.
 
 Нужны JDK 17, Android SDK (build-tools 34.0.0, platform android-34) и
 [Platform Tools](https://developer.android.com/tools/releases/platform-tools) с `adb`.
@@ -90,7 +101,7 @@ Undo everything with `tools/restore.sh <the same list>`.
 | Path | What it is |
 |---|---|
 | [PROMPT.md](PROMPT.md) | The prompt for Claude Code / any coding agent |
-| [launcher/](launcher/) | The home screen. 4.7 MB including the wallpapers; plain Android, no background services; network only for the weather |
+| [launcher/](launcher/) | The home screen and its screensaver. 4.7 MB including the wallpapers; plain Android, no background services; network only for the weather |
 | [launcher/build.ps1](launcher/build.ps1) | Windows build of the APK (no Gradle) |
 | [tools/windows/](tools/windows/) | Windows scripts: disable / restore a debloat list, build + install the launcher |
 | [launcher/res/values/config.xml](launcher/res/values/config.xml) | Dock apps, hidden apps, Live TV app, grid columns |

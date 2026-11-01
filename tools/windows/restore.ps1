@@ -1,4 +1,4 @@
-# Windows: undo everything — re-enable the packages in a debloat list, bring back the stock Google TV
+﻿# Windows: undo everything — re-enable the packages in a debloat list, bring back the stock Google TV
 # launcher (and the setup app the launcher install disables), make it the home screen again, remove
 # the tv-home launcher and reset animation speed.
 #   powershell -ExecutionPolicy Bypass -File tools\windows\restore.ps1 examples\chromecast-google-tv-2020\debloat.txt
@@ -19,5 +19,7 @@ foreach ($k in "window_animation_scale", "transition_animation_scale", "animator
     & $Adb @s shell settings put global $k 1.0
 }
 & $Adb @s shell cmd package set-home-activity --user 0 com.google.android.apps.tv.launcherx/.home.HomeActivity
+# Back to the stock screensaver (Ambient mode); the idle time is left as it is.
+& $Adb @s shell settings delete secure screensaver_components
 if (-not $KeepLauncher) { & $Adb @s uninstall com.mihir.tvhome }
 & $Adb @s shell input keyevent KEYCODE_HOME

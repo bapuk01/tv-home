@@ -49,5 +49,25 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- The screensaver's landscape for any season and weather; started over ADB, see ScenePreview. -->
+        <activity
+            android:name=".ScenePreview"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape"
+            android:theme="@style/Home" />
+
+        <!-- Screensaver: weather, landscape and calendar. Chosen over ADB (screensaver_components). -->
+        <service
+            android:name=".WeatherDream"
+            android:exported="true"
+            android:label="Погода и календарь"
+            android:permission="android.permission.BIND_DREAM_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.dreams.DreamService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

@@ -20,10 +20,6 @@ import android.graphics.Outline;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
-import android.location.Address;
-import android.location.Geocoder;
-import android.location.Location;
-import android.location.LocationManager;
 import android.media.tv.TvContract;
 import android.media.tv.TvInputInfo;
 import android.media.tv.TvInputManager;
@@ -54,10 +50,6 @@ import android.widget.PopupWindow;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import org.json.JSONObject;
-
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -68,7 +60,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Scanner;
 import java.util.Set;
 
 /**
@@ -120,7 +111,6 @@ public class MainActivity extends Activity {
     private final Runnable rotateWallpaper = this::nextWallpaper;
     static final long WALLPAPER_INTERVAL_MS = 10 * 60 * 1000;
     private final Runnable refreshWeather = this::updateWeather;
-    static final long WEATHER_INTERVAL_MS = 30 * 60 * 1000;
     private long weatherAt;
     private TextView greeting, clock, ampm, date, weather, title, wifiPill, hiddenPill, appsLabel;
     private int glowColor = 0xFF3A3A3A;
@@ -186,8 +176,8 @@ public class MainActivity extends Activity {
         if (getPackageManager().getChangedPackages(packageSeq) != null) loadApps();
         if (firstShow) { firstShow = false; playEntrance(); }
         long sinceWeather = SystemClock.elapsedRealtime() - weatherAt;
-        if (weatherAt == 0 || sinceWeather >= WEATHER_INTERVAL_MS || weather.getVisibility() != View.VISIBLE) updateWeather();
-        else handler.postDelayed(refreshWeather, WEATHER_INTERVAL_MS - sinceWeather);
+        if (weatherAt == 0 || sinceWeather >= Weather.INTERVAL_MS || weather.getVisibility() != View.VISIBLE) updateWeather();
+        else handler.postDelayed(refreshWeather, Weather.INTERVAL_MS - sinceWeather);
         // New photo on return if the current one has been up for the full interval.
         if (wallIndex < 0 || SystemClock.elapsedRealtime() - wallChangedAt >= WALLPAPER_INTERVAL_MS) nextWallpaper();
         else scheduleWallpaper(WALLPAPER_INTERVAL_MS - (SystemClock.elapsedRealtime() - wallChangedAt));
@@ -822,148 +812,20 @@ public class MainActivity extends Activity {
 
     // ---------------------------------------------------------------- weather
 
-    /** Locate the TV (newest known fix, else ask for one), then fetch; falls back to the last place. */
     private void updateWeather() {
         handler.removeCallbacks(refreshWeather);
         // Until the first reading arrives (e.g. location just switched on), retry every minute.
-        handler.postDelayed(refreshWeather, weather.getVisibility() == View.VISIBLE ? WEATHER_INTERVAL_MS : 60 * 1000);
+        handler.postDelayed(refreshWeather, weather.getVisibility() == View.VISIBLE ? Weather.INTERVAL_MS : 60 * 1000);
         weatherAt = SystemClock.elapsedRealtime();
-        LocationManager lm = (LocationManager) getSystemService(LOCATION_SERVICE);
-        try {
-            List<String> providers = lm.getProviders(true);
-            Location best = null;
-            for (String p : providers) {
-                Location l = lm.getLastKnownLocation(p);
-                if (l != null && (best == null || l.getTime() > best.getTime())) best = l;
-            }
-            if (best != null) { fetchWeather(best.getLatitude(), best.getLongitude()); return; }
-            String p = providers.contains("fused") ? "fused"
-                    : providers.contains(LocationManager.NETWORK_PROVIDER) ? LocationManager.NETWORK_PROVIDER : null;
-            if (p != null) {
-                lm.getCurrentLocation(p, null, getMainExecutor(), l -> {
-                    if (l != null) fetchWeather(l.getLatitude(), l.getLongitude());
-                    else fetchSavedWeather();
-                });
-                return;
-            }
-        } catch (RuntimeException e) { android.util.Log.w("tvhome", "location", e); } // no permission or location off
-        fetchSavedWeather();
-    }
-
-    private void fetchSavedWeather() {
-        SharedPreferences p = getPreferences(MODE_PRIVATE);
-        if (p.contains("w_lat")) fetchWeather(p.getFloat("w_lat", 0), p.getFloat("w_lon", 0));
-    }
-
-    private void fetchWeather(double lat, double lon) {
-        new Thread(() -> {
-            // Open-Meteo first; met.no when it's unreachable (some ISPs block Open-Meteo's servers).
-            int[] w = null; // {WMO code, temperature, is day}
-            try { w = openMeteo(lat, lon); } catch (Exception e) { android.util.Log.w("tvhome", "open-meteo: " + e); }
-            if (w == null) {
-                try { w = metNo(lat, lon); } catch (Exception e) { android.util.Log.w("tvhome", "met.no: " + e); }
-            }
-            if (w == null) return; // offline: keep showing the last reading
-            String city = cityName(lat, lon);
-            int code = w[0], temp = w[1];
-            boolean day = w[2] == 1;
-            runOnUiThread(() -> {
-                getPreferences(MODE_PRIVATE).edit()
-                        .putString("w_city", city).putInt("w_code", code).putInt("w_temp", temp)
-                        .putBoolean("w_day", day).putFloat("w_lat", (float) lat).putFloat("w_lon", (float) lon)
-                        .apply();
-                showWeather();
-            });
-        }).start();
-    }
-
-    private static int[] openMeteo(double lat, double lon) throws Exception {
-        JSONObject cur = new JSONObject(httpGet(String.format(Locale.US,
-                "https://api.open-meteo.com/v1/forecast?latitude=%.3f&longitude=%.3f"
-                        + "&current=temperature_2m,weather_code,is_day&timezone=auto", lat, lon)))
-                .getJSONObject("current");
-        return new int[]{cur.getInt("weather_code"), (int) Math.round(cur.getDouble("temperature_2m")),
-                cur.optInt("is_day", 1)};
-    }
-
-    /** Norwegian Meteorological Institute; its symbol codes are mapped onto the WMO codes above. */
-    private static int[] metNo(double lat, double lon) throws Exception {
-        JSONObject data = new JSONObject(httpGet(String.format(Locale.US,
-                "https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=%.3f&lon=%.3f", lat, lon)))
-                .getJSONObject("properties").getJSONArray("timeseries").getJSONObject(0).getJSONObject("data");
-        double temp = data.getJSONObject("instant").getJSONObject("details").getDouble("air_temperature");
-        String s = data.getJSONObject("next_1_hours").getJSONObject("summary").getString("symbol_code");
-        int code = s.contains("thunder") ? 95
-                : s.contains("snow") ? 71
-                : s.contains("sleet") ? 66
-                : s.contains("rainshowers") ? 80
-                : s.contains("rain") ? 61
-                : s.startsWith("fog") ? 45
-                : s.startsWith("cloudy") ? 3
-                : s.startsWith("partlycloudy") ? 2
-                : s.startsWith("fair") ? 1 : 0;
-        return new int[]{code, (int) Math.round(temp), s.endsWith("_night") ? 0 : 1};
-    }
-
-    /** City name in Russian: the system geocoder, else BigDataCloud, else the last known name. */
-    private String cityName(double lat, double lon) {
-        try {
-            List<Address> found = new Geocoder(this, new Locale("ru")).getFromLocation(lat, lon, 1);
-            if (found != null && !found.isEmpty()) {
-                Address a = found.get(0);
-                String n = a.getLocality() != null ? a.getLocality()
-                        : a.getSubAdminArea() != null ? a.getSubAdminArea() : a.getAdminArea();
-                if (n != null) return n;
-            }
-        } catch (Exception ignored) { }
-        try {
-            JSONObject j = new JSONObject(httpGet(String.format(Locale.US,
-                    "https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=%.3f&longitude=%.3f&localityLanguage=ru",
-                    lat, lon)));
-            String n = j.optString("city");
-            if (n.isEmpty()) n = j.optString("locality");
-            if (!n.isEmpty()) return n;
-        } catch (Exception ignored) { }
-        return getPreferences(MODE_PRIVATE).getString("w_city", "");
-    }
-
-    private static String httpGet(String url) throws java.io.IOException {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setRequestProperty("User-Agent", "tv-home/1.0 github.com/bapuk01/tv-home"); // met.no requires one
-        c.setConnectTimeout(10000);
-        c.setReadTimeout(10000);
-        try (Scanner s = new Scanner(c.getInputStream(), "UTF-8").useDelimiter("\\A")) {
-            return s.hasNext() ? s.next() : "";
-        } finally {
-            c.disconnect();
-        }
+        Weather.refresh(this, () -> { if (!isDestroyed()) showWeather(); });
     }
 
     /** "Иркутск   ❄️  −15°" from the last saved reading. */
     private void showWeather() {
-        SharedPreferences p = getPreferences(MODE_PRIVATE);
-        if (!p.contains("w_temp")) { weather.setVisibility(View.GONE); return; }
-        int t = p.getInt("w_temp", 0);
-        String temp = (t > 0 ? "+" : t < 0 ? "−" : "") + Math.abs(t) + "°";
-        String city = p.getString("w_city", "");
-        weather.setText((city.isEmpty() ? "" : city + "   ")
-                + weatherIcon(p.getInt("w_code", -1), p.getBoolean("w_day", true)) + "  " + temp);
+        Weather w = Weather.load(this);
+        if (w == null) { weather.setVisibility(View.GONE); return; }
+        weather.setText((w.city.isEmpty() ? "" : w.city + "   ") + Weather.emoji(w.code, w.day) + "  " + Weather.degrees(w.temp));
         weather.setVisibility(View.VISIBLE);
-    }
-
-    /** WMO weather code (as used by Open-Meteo) to an emoji. */
-    private static String weatherIcon(int code, boolean day) {
-        if (code == 0) return day ? "☀️" : "🌙";
-        if (code == 1) return day ? "🌤️" : "🌙";
-        if (code == 2) return day ? "⛅" : "☁️";
-        if (code == 3) return "☁️";
-        if (code == 45 || code == 48) return "🌫️";
-        if (code >= 51 && code <= 57) return "🌦️";
-        if (code >= 61 && code <= 67) return "🌧️";
-        if ((code >= 71 && code <= 77) || code == 85 || code == 86) return "❄️";
-        if (code >= 80 && code <= 82) return "🌦️";
-        if (code >= 95) return "⛈️";
-        return "🌡️";
     }
 
     // ---------------------------------------------------------------- glow
