@@ -13,6 +13,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- "Удалить" in the long-press menu opens the system uninstall dialog. -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!-- "Заставка" pill: sets the idle time before the screensaver. Granted over ADB (appops). -->
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -49,6 +51,14 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!-- The screensaver on demand ("Показать сейчас" in the launcher's screensaver menu). -->
+        <activity
+            android:name=".ScreensaverActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:screenOrientation="landscape"
+            android:theme="@style/Home" />
 
         <!-- The screensaver's landscape for any season and weather; started over ADB, see ScenePreview. -->
         <activity

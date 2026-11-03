@@ -346,7 +346,7 @@ public class MainActivity extends Activity {
         hiddenPill.setOnClickListener(v -> showHidden(v));
         hiddenPill.setVisibility(View.GONE);
         TextView settings = pill("Настройки", "⚙");
-        settings.setOnClickListener(v -> launch(new Intent(Settings.ACTION_SETTINGS)));
+        settings.setOnClickListener(v -> showSettingsMenu(v));
         for (TextView p : new TextView[]{inputs, wifiPill, hiddenPill, settings}) {
             right.addView(p, llp(-2, dp(30), dp(10), 0, 0, 0));
             pills.add(p);
@@ -759,7 +759,7 @@ public class MainActivity extends Activity {
         return String.valueOf(c);
     }
 
-    private TextView menuRow(String label, Runnable action) {
+    private TextView menuRow(CharSequence label, Runnable action) {
         TextView r = text(13, "sans-serif", Color.WHITE);
         r.setText(label);
         r.setTag(action);
@@ -808,6 +808,70 @@ public class MainActivity extends Activity {
         SpannableString label = new SpannableString("●  " + name);
         if (nc != null) label.setSpan(new ForegroundColorSpan(0xFF34C759), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         wifiPill.setText(label);
+    }
+
+    // ---------------------------------------------------------------- screensaver
+
+    private static final int[] SAVER_MINUTES = {5, 10, 15, 30, 60};
+
+    /** Minutes of idle before the screensaver: the system screen timeout. */
+    private int screensaverMinutes() {
+        return Settings.System.getInt(getContentResolver(), Settings.System.SCREEN_OFF_TIMEOUT, 0) / 60000;
+    }
+
+    /** Minutes of idle before the TV goes to sleep by itself (about 19 on our TCL), or 0 for never. */
+    private int sleepMinutes() {
+        int ms = Settings.Secure.getInt(getContentResolver(), "sleep_timeout", -1);
+        return ms <= 0 ? 0 : (ms + 59999) / 60000;
+    }
+
+    /** "Настройки": the TV's settings, plus the screensaver's idle time and a way to see it now. */
+    private void showSettingsMenu(View anchor) {
+        List<TextView> rows = new ArrayList<>();
+        rows.add(menuRow("Настройки ТВ", () -> launch(new Intent(Settings.ACTION_SETTINGS))));
+        rows.add(menuRow("Заставка · " + shortMinutes(screensaverMinutes()), () -> showScreensaverMenu(anchor)));
+        rows.add(menuRow("Показать заставку", () -> launch(new Intent(this, ScreensaverActivity.class))));
+        showMenu(anchor, rows);
+    }
+
+    private void showScreensaverMenu(View anchor) {
+        int current = screensaverMinutes();
+        List<TextView> rows = new ArrayList<>();
+        TextView selected = null;
+        for (int m : SAVER_MINUTES) {
+            // The tick is always there, invisible on the other rows, so the labels line up.
+            SpannableString label = new SpannableString("✓   через " + longMinutes(m));
+            if (m != current) label.setSpan(new ForegroundColorSpan(Color.TRANSPARENT), 0, 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            TextView r = menuRow(label, () -> setScreensaverMinutes(m));
+            rows.add(r);
+            if (m == current) selected = r;
+        }
+        showMenu(anchor, rows);
+        if (selected != null) selected.requestFocus();
+    }
+
+    private void setScreensaverMinutes(int m) {
+        // WRITE_SETTINGS is granted over ADB (install-launcher.ps1); TVs have no screen to grant it on.
+        if (!Settings.System.canWrite(this)) {
+            Toast.makeText(this, "Нет разрешения менять время заставки (см. README)", Toast.LENGTH_LONG).show();
+            return;
+        }
+        Settings.System.putInt(getContentResolver(), Settings.System.SCREEN_OFF_TIMEOUT, m * 60000);
+        int sleep = sleepMinutes();
+        Toast.makeText(this, sleep > 0 && sleep <= m
+                ? "Телевизор сам засыпает через " + longMinutes(sleep) + " простоя — заставка не успеет появиться"
+                : "Заставка будет через " + longMinutes(m) + " простоя", Toast.LENGTH_LONG).show();
+    }
+
+    private static String shortMinutes(int m) {
+        return m >= 60 && m % 60 == 0 ? m / 60 + " ч" : m + " мин";
+    }
+
+    /** "5 минут", "21 минуту", "1 час". */
+    private static String longMinutes(int m) {
+        if (m >= 60 && m % 60 == 0) { int h = m / 60; return h == 1 ? "1 час" : h + (h < 5 ? " часа" : " часов"); }
+        int t = m % 100, o = m % 10;
+        return m + (t >= 11 && t <= 14 ? " минут" : o == 1 ? " минуту" : o >= 2 && o <= 4 ? " минуты" : " минут");
     }
 
     // ---------------------------------------------------------------- weather

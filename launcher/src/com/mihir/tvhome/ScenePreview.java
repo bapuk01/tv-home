@@ -28,7 +28,7 @@ public class ScenePreview extends Activity {
         int w = getResources().getDisplayMetrics().widthPixels, h = getResources().getDisplayMetrics().heightPixels;
         v.setImageBitmap(s.paint(w, h));
         root.addView(v, new FrameLayout.LayoutParams(-1, -1));
-        WeatherDream.Precipitation p = new WeatherDream.Precipitation(this);
+        Screensaver.Precipitation p = new Screensaver.Precipitation(this);
         root.addView(p, new FrameLayout.LayoutParams(-1, -1));
         setContentView(root);
         p.set(kind, code);

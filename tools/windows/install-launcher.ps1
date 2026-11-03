@@ -29,6 +29,7 @@ if ($ScreensaverMinutes -gt 0) {
     # so no screensaver would start.
     foreach ($cmd in @(
         "settings put secure screensaver_components com.mihir.tvhome/.WeatherDream",
+        "appops set com.mihir.tvhome WRITE_SETTINGS allow",
         "settings put secure screensaver_enabled 1",
         "settings put system screen_off_timeout $($ScreensaverMinutes * 60000)",
         "settings put global stay_on_while_plugged_in 0")) {
