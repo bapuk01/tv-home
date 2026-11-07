@@ -112,7 +112,9 @@ public class MainActivity extends Activity {
     static final long WALLPAPER_INTERVAL_MS = 10 * 60 * 1000;
     private final Runnable refreshWeather = this::updateWeather;
     private long weatherAt;
-    private TextView greeting, clock, ampm, date, weather, title, wifiPill, hiddenPill, appsLabel;
+    private TextView greeting, clock, ampm, date, weatherCity, weatherTemp, title, wifiPill, hiddenPill, appsLabel;
+    private LinearLayout weather;
+    private Screensaver.Icon weatherIcon;
     private int glowColor = 0xFF3A3A3A;
     private ValueAnimator glowAnim;
     // The glow is drawn at 1/10 of the screen and stretched: it's a soft gradient, so it looks the
@@ -323,11 +325,23 @@ public class MainActivity extends Activity {
         date.setLetterSpacing(0.12f);
         left.addView(date);
 
-        weather = text(23, "sans-serif-light", Color.WHITE);
-        weather.setSingleLine(true);
+        // City, icon, temperature. The icon is drawn, not an emoji: the TVs' colour-emoji rendering
+        // sometimes left an empty square in its place.
+        weather = new LinearLayout(this);
+        weather.setGravity(Gravity.CENTER_VERTICAL);
+        weather.setClipChildren(false);
         weather.setVisibility(View.GONE);
+        weatherCity = text(23, "sans-serif-light", Color.WHITE);
+        weatherCity.setSingleLine(true);
+        weather.addView(weatherCity, llp(-2, -2, 0, 0, dp(14), 0));
+        weatherIcon = new Screensaver.Icon(this);
+        weatherIcon.setShadow(dp(6), 0x99000000);
+        weather.addView(weatherIcon, new LinearLayout.LayoutParams(dp(36), dp(36)));
+        weatherTemp = text(23, "sans-serif-light", Color.WHITE);
+        weatherTemp.setSingleLine(true);
+        weather.addView(weatherTemp, llp(-2, -2, dp(12), 0, 0, 0));
         left.addView(weather, llp(-2, -2, 0, dp(10), 0, 0));
-        for (TextView t : new TextView[]{greeting, clock, ampm, date, weather}) t.setShadowLayer(dp(10), 0, dp(1), 0xB3000000);
+        for (TextView t : new TextView[]{greeting, clock, ampm, date, weatherCity, weatherTemp}) t.setShadowLayer(dp(10), 0, dp(1), 0xB3000000);
         // Small text over bright photos: a tight, dark shadow keeps the letters' edges readable.
         date.setShadowLayer(dp(3), 0, dp(1), 0xF2000000);
         header.addView(left, new FrameLayout.LayoutParams(dp(420), -2, Gravity.START | Gravity.TOP));
@@ -884,11 +898,14 @@ public class MainActivity extends Activity {
         Weather.refresh(this, () -> { if (!isDestroyed()) showWeather(); });
     }
 
-    /** "Иркутск   ❄️  −15°" from the last saved reading. */
+    /** "Иркутск  (snow)  −15°" from the last saved reading. */
     private void showWeather() {
         Weather w = Weather.load(this);
         if (w == null) { weather.setVisibility(View.GONE); return; }
-        weather.setText((w.city.isEmpty() ? "" : w.city + "   ") + Weather.emoji(w.code, w.day) + "  " + Weather.degrees(w.temp));
+        weatherCity.setText(w.city);
+        weatherCity.setVisibility(w.city.isEmpty() ? View.GONE : View.VISIBLE);
+        weatherIcon.set(w.code, w.day);
+        weatherTemp.setText(Weather.degrees(w.temp));
         weather.setVisibility(View.VISIBLE);
     }
 

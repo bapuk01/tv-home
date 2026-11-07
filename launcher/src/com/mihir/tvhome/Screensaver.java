@@ -429,6 +429,13 @@ final class Screensaver extends ContextWrapper {
             line.setStrokeCap(Paint.Cap.ROUND);
         }
 
+        /** A soft drop shadow, for drawing over photos. */
+        void setShadow(float radius, int color) {
+            fill.setShadowLayer(radius, 0, radius / 6, color);
+            line.setShadowLayer(radius, 0, radius / 6, color);
+            invalidate();
+        }
+
         void set(int code, boolean day) {
             if (code == this.code && day == this.day) return;
             this.code = code;

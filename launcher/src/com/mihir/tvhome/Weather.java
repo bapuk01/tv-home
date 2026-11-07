@@ -243,21 +243,6 @@ final class Weather {
         return (t > 0 ? "+" : t < 0 ? "−" : "") + Math.abs(t) + "°";
     }
 
-    /** WMO weather code to an emoji (home screen). */
-    static String emoji(int code, boolean day) {
-        if (code == 0) return day ? "☀️" : "🌙";
-        if (code == 1) return day ? "🌤️" : "🌙";
-        if (code == 2) return day ? "⛅" : "☁️";
-        if (code == 3) return "☁️";
-        if (code == 45 || code == 48) return "🌫️";
-        if (code >= 51 && code <= 57) return "🌦️";
-        if (code >= 61 && code <= 67) return "🌧️";
-        if ((code >= 71 && code <= 77) || code == 85 || code == 86) return "❄️";
-        if (code >= 80 && code <= 82) return "🌦️";
-        if (code >= 95) return "⛈️";
-        return "🌡️";
-    }
-
     /** WMO weather code in words. */
     static String describe(int code) {
         if (code == 0) return "Ясно";
